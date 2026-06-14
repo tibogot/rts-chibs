@@ -6117,7 +6117,6 @@
         }
         buildBases();
         buildNavGrid();
-        buildGridDebug();
 
         // ── CAPTURE POINTS (supply nodes) ─────────────────────────────────
         const NODE_COLORS = {
@@ -6615,6 +6614,9 @@
           gridDebug.renderOrder = 1;
           scene.add(gridDebug);
         }
+
+        buildNavGrid();
+        buildGridDebug();
 
         // ── UNITS ────────────────────────────────────────────────────────
         // Source of truth is the data object; the Three.js group just renders
