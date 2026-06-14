@@ -2178,7 +2178,7 @@
         // PBR terrain — heightfield + surface (see rts-terrain.js).
         terrain: {
           ...RTS_TERRAIN_DEFAULTS,
-          winter: false,
+          winter: true,
           pbrLayers: {
             aerial: { ...RTS_TERRAIN_DEFAULTS.pbrLayers.aerial },
             cliff: { ...RTS_TERRAIN_DEFAULTS.pbrLayers.cliff },
@@ -2516,7 +2516,7 @@
         },
         // Fog of war — grid shroud + per-unit vision (scouts see farther).
         fog: {
-          enabled: false,
+          enabled: true,
           cellSize: 5,
           baseVision: 58,
           scoutVision: 108,
@@ -2539,7 +2539,7 @@
           maxSlope: 0.44, // block standing on slopes steeper than this (≈ terrain cliffHigh)
           maxStepGrade: 0.52, // max height rise per meter along a path edge
           bridgeStepGrade: 1.6, // relaxed grade on bridge decks + ramps
-          showGrid: false, // debug: paint blocked cells (color = blocker type)
+          showGrid: true, // debug: paint blocked cells (color = blocker type)
         },
         // Same defaults as v2/editor (config.js light block).
         light: {
@@ -6117,6 +6117,7 @@
         }
         buildBases();
         buildNavGrid();
+        buildGridDebug();
 
         // ── CAPTURE POINTS (supply nodes) ─────────────────────────────────
         const NODE_COLORS = {
