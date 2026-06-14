@@ -229,6 +229,24 @@ export const RTS_TERRAIN_PBR_DEFAULT_PATHS = {
   },
 };
 
+export const RTS_TERRAIN_PBR_WINTER_AERIAL_PATHS = {
+  color: `${PBR_PATH}Snow010A/Snow010A_1K-JPG_Color.jpg`,
+  normal: `${PBR_PATH}Snow010A/Snow010A_1K-JPG_NormalGL.jpg`,
+  roughness: `${PBR_PATH}Snow010A/Snow010A_1K-JPG_Roughness.jpg`,
+  ao: `${PBR_PATH}Snow010A/Snow010A_1K-JPG_AmbientOcclusion.jpg`,
+};
+
+/** Built-in PBR paths — aerial layer swaps between Grass005 and Snow010A. */
+export function getRtsTerrainPbrDefaultPaths(winter = false) {
+  return {
+    aerial: winter
+      ? RTS_TERRAIN_PBR_WINTER_AERIAL_PATHS
+      : RTS_TERRAIN_PBR_DEFAULT_PATHS.aerial,
+    cliff: RTS_TERRAIN_PBR_DEFAULT_PATHS.cliff,
+    dirt: RTS_TERRAIN_PBR_DEFAULT_PATHS.dirt,
+  };
+}
+
 /** Distant soft hills — low amplitude, wide falloff (not cliff-spined lumps). */
 const RTS_PEAKS = [
   { cx: -300, cz: 260, r: 820000, a: 11 },
@@ -448,7 +466,10 @@ export async function reloadRtsTerrainPbrTextures(terrainData, params = {}) {
 }
 
 async function ensureTerrainPbr(params = {}) {
-  const pbrKey = JSON.stringify(params.pbrLayers ?? {});
+  const pbrKey = JSON.stringify({
+    layers: params.pbrLayers ?? {},
+    winter: !!params.winter,
+  });
   if (
     _terrainPbr &&
     _terrainPbrGen === TERRAIN_PBR_GEN &&
@@ -461,6 +482,7 @@ async function ensureTerrainPbr(params = {}) {
   const baseUrl = import.meta.url;
   const loader = new THREE.TextureLoader();
   const layersCustom = params.pbrLayers ?? {};
+  const defaultPaths = getRtsTerrainPbrDefaultPaths(!!params.winter);
 
   const uniforms = {};
   const allTextures = [];
@@ -471,19 +493,19 @@ async function ensureTerrainPbr(params = {}) {
     const aerial = await loadLayerMaps(
       loader,
       baseUrl,
-      RTS_TERRAIN_PBR_DEFAULT_PATHS.aerial,
+      defaultPaths.aerial,
       layersCustom.aerial,
     );
     const cliff = await loadLayerMaps(
       loader,
       baseUrl,
-      RTS_TERRAIN_PBR_DEFAULT_PATHS.cliff,
+      defaultPaths.cliff,
       layersCustom.cliff,
     );
     const dirt = await loadLayerMaps(
       loader,
       baseUrl,
-      RTS_TERRAIN_PBR_DEFAULT_PATHS.dirt,
+      defaultPaths.dirt,
       layersCustom.dirt,
     );
 

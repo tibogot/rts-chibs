@@ -1966,6 +1966,7 @@
         RTS_TERRAIN_PBR_LAYER_KEYS,
         RTS_TERRAIN_PBR_LAYER_META,
         RTS_TERRAIN_PBR_DEFAULT_PATHS,
+        getRtsTerrainPbrDefaultPaths,
         syncRtsTerrainUniforms,
       } from "./rts-terrain.js";
       import { createRtsCameraControl } from "./rtsCameraControl.js";
@@ -2176,6 +2177,7 @@
         // PBR terrain — heightfield + surface (see rts-terrain.js).
         terrain: {
           ...RTS_TERRAIN_DEFAULTS,
+          winter: false,
           pbrLayers: {
             aerial: { ...RTS_TERRAIN_DEFAULTS.pbrLayers.aerial },
             cliff: { ...RTS_TERRAIN_DEFAULTS.pbrLayers.cliff },
@@ -2568,7 +2570,7 @@
         },
         /** GLB pine forest (pine2_compressed) — instanced 2-tier mesh LOD. */
         forest: {
-          enabled: true,
+          enabled: false,
           halfExtent: 560,
           spacing: 15,
           jitter: 2.8,
@@ -13706,6 +13708,9 @@
           const sec = _section(body, "Terrain");
           const onSurf = () => syncTerrainUniforms();
           const onShape = () => scheduleTerrainShapeRebuild(false);
+          const terrainPbrDefaults = getRtsTerrainPbrDefaultPaths(
+            PARAMS.terrain.winter,
+          );
 
           _hint(
             sec,
@@ -13742,7 +13747,7 @@
               _terrainPbrLayerCard(sec, layerKey, {
                 meta: RTS_TERRAIN_PBR_LAYER_META[layerKey],
                 layers: PARAMS.terrain.pbrLayers,
-                defaults: RTS_TERRAIN_PBR_DEFAULT_PATHS,
+                defaults: terrainPbrDefaults,
                 blobNames: terrainPbrBlobNames,
                 onPick: (layer, slot, file) => {
                   setTerrainPbrSlot(layer, slot, file);
@@ -13760,6 +13765,30 @@
               }),
             );
           }
+
+          _toggle(sec, PARAMS.terrain, "winter", {
+            label: "Winter (snow flats)",
+            onChange: async () => {
+              Object.assign(
+                terrainPbrDefaults,
+                getRtsTerrainPbrDefaultPaths(PARAMS.terrain.winter),
+              );
+              pbrStatus.className = "terrain-pbr-status";
+              pbrStatus.textContent = PARAMS.terrain.winter
+                ? "Switching to snow textures…"
+                : "Switching to grass textures…";
+              for (const card of pbrCards) card.refresh();
+              const ok = await applyTerrainPbrTextures();
+              pbrStatus.className = ok
+                ? "terrain-pbr-status ok"
+                : "terrain-pbr-status err";
+              pbrStatus.textContent = ok
+                ? PARAMS.terrain.winter
+                  ? "Winter mode — Snow010A on flats."
+                  : "Summer mode — Grass005 on flats."
+                : "Failed — check console. Built-in paths must exist under textures/pbr_materials/.";
+            },
+          });
 
           _btnGrid(
             sec,
@@ -13782,6 +13811,10 @@
                 title: "Reset to defaults",
                 onClick: async () => {
                   resetTerrainPbrLayers();
+                  Object.assign(
+                    terrainPbrDefaults,
+                    getRtsTerrainPbrDefaultPaths(PARAMS.terrain.winter),
+                  );
                   for (const card of pbrCards) card.refresh();
                   pbrStatus.className = "terrain-pbr-status";
                   pbrStatus.textContent = "Resetting to built-in textures…";
