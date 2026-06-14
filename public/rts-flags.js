@@ -24,13 +24,19 @@ function windDirectionForFaction(faction) {
   return faction === "player" ? 90 : 270;
 }
 
-export function createRtsBaseFlag(faction, palette) {
+export function createRtsBaseFlag(faction, palette, flagCfg = {}) {
   const colors = palette?.[faction] ?? palette?.player;
   const flagColor = hexColor(colors?.accent ?? 0xcc0000);
+  const textureUrl =
+    flagCfg?.textureUrl ??
+    flagCfg?.[faction]?.textureUrl ??
+    palette?.[faction]?.flagTextureUrl ??
+    "";
   return createFlagProp({
     ...FLAG_DEFAULTS,
     ...RTS_FLAG_DEFAULTS,
     flagColor,
+    textureUrl,
     windDirection: windDirectionForFaction(faction),
   });
 }
@@ -48,7 +54,7 @@ export function disposeRtsBaseFlags(baseDefs) {
 }
 
 /** Parent a wind flag on each live HQ pad (base-local coords). */
-export function attachRtsBaseFlags(baseDefs, palette) {
+export function attachRtsBaseFlags(baseDefs, palette, flagCfg = {}) {
   for (const faction of ["player", "enemy"]) {
     const b = baseDefs?.[faction];
     if (!b?.group || b.dead) continue;
@@ -56,10 +62,21 @@ export function attachRtsBaseFlags(baseDefs, palette) {
       b.flag.group.parent?.remove(b.flag.group);
       b.flag.dispose();
     }
-    const flag = createRtsBaseFlag(faction, palette);
+    const flag = createRtsBaseFlag(faction, palette, {
+      textureUrl: flagCfg?.[faction]?.textureUrl ?? "",
+    });
     flag.group.position.set(5.6, 0, 2.85);
     b.group.add(flag.group);
     b.flag = flag;
+  }
+}
+
+/** Live-update cloth textures without rebuilding bases. */
+export function syncRtsBaseFlagTextures(baseDefs, flagCfg = {}) {
+  for (const faction of ["player", "enemy"]) {
+    const b = baseDefs?.[faction];
+    if (!b?.flag || b.dead) continue;
+    b.flag.setParam("textureUrl", flagCfg?.[faction]?.textureUrl ?? "");
   }
 }
 

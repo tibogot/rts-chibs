@@ -1978,6 +1978,7 @@
         disposeRtsBaseFlags,
         attachRtsBaseFlags,
         updateRtsBaseFlags,
+        syncRtsBaseFlagTextures,
       } from "./rts-flags.js";
       import {
         createAstarState,
@@ -2210,6 +2211,10 @@
             fireRate: 1.1,
             turnRate: 5,
           },
+        },
+        flags: {
+          player: { textureUrl: "" },
+          enemy: { textureUrl: "" },
         },
         // Requisition — click player base to train units.
         requisition: {
@@ -3662,6 +3667,41 @@
         const basesGroup = new THREE.Group();
         scene.add(basesGroup);
 
+        const flagTextureBlobUrls = {};
+        const flagTextureBlobNames = {};
+
+        function revokeFlagTextureBlob(faction) {
+          const url = flagTextureBlobUrls[faction];
+          if (url) {
+            URL.revokeObjectURL(url);
+            delete flagTextureBlobUrls[faction];
+            delete flagTextureBlobNames[faction];
+          }
+        }
+
+        function getFlagTextureLabel(faction) {
+          const custom = PARAMS.flags[faction]?.textureUrl?.trim?.() ?? "";
+          if (!custom) return "None (faction color)";
+          if (custom.startsWith("blob:")) {
+            return flagTextureBlobNames[faction] || "Local file";
+          }
+          return custom.split(/[/\\]/).pop();
+        }
+
+        function setFlagTexture(faction, file) {
+          revokeFlagTextureBlob(faction);
+          if (!file) {
+            PARAMS.flags[faction].textureUrl = "";
+            syncRtsBaseFlagTextures(BASE_DEFS, PARAMS.flags);
+            return;
+          }
+          const url = URL.createObjectURL(file);
+          flagTextureBlobUrls[faction] = url;
+          flagTextureBlobNames[faction] = file.name || "Local file";
+          PARAMS.flags[faction].textureUrl = url;
+          syncRtsBaseFlagTextures(BASE_DEFS, PARAMS.flags);
+        }
+
         function registerBasePickables() {
           basePickBodies.length = 0;
           for (const faction of ["player", "enemy"]) {
@@ -4020,7 +4060,7 @@
             attachBaseTurrets(BASE_DEFS[def.faction]);
             attachBaseObservationTowers(BASE_DEFS[def.faction]);
           }
-          attachRtsBaseFlags(BASE_DEFS, FACTION_PALETTE);
+          attachRtsBaseFlags(BASE_DEFS, FACTION_PALETTE, PARAMS.flags);
           registerBasePickables();
           scheduleWindmillRebuild();
         }
@@ -12577,9 +12617,11 @@
           resetMatch,
           isMatchActive: () => game.active,
           updateDifficultyHud,
-          buildBases,
-          attachBaseBars,
-          setCamMode,
+        buildBases,
+        attachBaseBars,
+        setFlagTexture,
+        getFlagTextureLabel,
+        setCamMode,
           getCamMode: () => cam.mode,
           readCameraPose,
           syncCameraFromParams,
@@ -13026,6 +13068,62 @@
         };
       }
 
+      function _flagTexturePicker(parent, label, opts) {
+        const { getLabel, onPick, onClear } = opts;
+        const row = document.createElement("div");
+        row.className = "terrain-pbr-slot";
+        const lbl = document.createElement("span");
+        lbl.className = "terrain-pbr-slot-label";
+        lbl.textContent = label;
+        const name = document.createElement("span");
+        name.className = "terrain-pbr-slot-name";
+        const pickBtn = document.createElement("button");
+        pickBtn.type = "button";
+        pickBtn.className = "terrain-pbr-slot-btn";
+        pickBtn.textContent = "Choose";
+        const clearBtn = document.createElement("button");
+        clearBtn.type = "button";
+        clearBtn.className = "terrain-pbr-slot-btn";
+        clearBtn.textContent = "×";
+        clearBtn.title = "Clear texture";
+        const fileInp = document.createElement("input");
+        fileInp.type = "file";
+        fileInp.accept = "image/*,.jpg,.jpeg,.png,.webp";
+        fileInp.style.display = "none";
+
+        const refresh = () => {
+          const text = getLabel();
+          const custom = text !== "None (faction color)";
+          name.textContent = text;
+          name.classList.toggle("custom", custom);
+          name.classList.toggle("empty", !custom);
+          clearBtn.disabled = !custom;
+          clearBtn.style.opacity = custom ? "1" : "0.35";
+        };
+
+        pickBtn.addEventListener("click", () => fileInp.click());
+        fileInp.addEventListener("change", () => {
+          const file = fileInp.files?.[0];
+          fileInp.value = "";
+          if (!file) return;
+          onPick(file);
+          refresh();
+        });
+        clearBtn.addEventListener("click", () => {
+          onClear();
+          refresh();
+        });
+
+        row.appendChild(lbl);
+        row.appendChild(name);
+        row.appendChild(pickBtn);
+        row.appendChild(clearBtn);
+        row.appendChild(fileInp);
+        parent.appendChild(row);
+        refresh();
+        return { refresh };
+      }
+
       function _helpBlock(parent, title, rows) {
         const block = document.createElement("div");
         block.className = "help-block";
@@ -13124,6 +13222,8 @@
         updateDifficultyHud,
         buildBases,
         attachBaseBars,
+        setFlagTexture,
+        getFlagTextureLabel,
         setCamMode,
         getCamMode,
         readCameraPose,
@@ -13700,6 +13800,22 @@
             max: 5000,
             step: 100,
             onChange: () => spawnArmies(),
+          });
+          _separator(sec);
+          _subheading(
+            sec,
+            "HQ flags",
+            "Cloth texture per team — leave empty to use faction accent color.",
+          );
+          _flagTexturePicker(sec, "Player flag", {
+            getLabel: () => getFlagTextureLabel("player"),
+            onPick: (file) => setFlagTexture("player", file),
+            onClear: () => setFlagTexture("player", null),
+          });
+          _flagTexturePicker(sec, "Enemy flag", {
+            getLabel: () => getFlagTextureLabel("enemy"),
+            onPick: (file) => setFlagTexture("enemy", file),
+            onClear: () => setFlagTexture("enemy", null),
           });
         }
 
