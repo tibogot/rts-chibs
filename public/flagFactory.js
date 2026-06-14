@@ -172,8 +172,11 @@ export function createFlagProp(params = {}) {
   clothMesh.castShadow = true;
   group.add(clothMesh);
 
-  // Texture
-  if (p.textureUrl) _loadTexture(clothMat, p.textureUrl);
+  let flagColor = p.flagColor;
+  const texState = { flagColor, hasTexture: false };
+
+  // Texture — MeshStandardMaterial multiplies color × map, so use white when mapped.
+  if (p.textureUrl) _loadTexture(clothMat, p.textureUrl, texState);
 
   // State
   let windIntensity = p.windIntensity;
@@ -227,8 +230,11 @@ export function createFlagProp(params = {}) {
     if (key === "windIntensity") windIntensity = value;
     else if (key === "windSpeed") windSpeed = value;
     else if (key === "windDirection") windDirection = value;
-    else if (key === "flagColor") clothMat.color.set(value);
-    else if (key === "textureUrl") _loadTexture(clothMat, value);
+    else if (key === "flagColor") {
+      flagColor = value;
+      texState.flagColor = value;
+      if (!texState.hasTexture) clothMat.color.set(value);
+    } else if (key === "textureUrl") _loadTexture(clothMat, value, texState);
     else if (key === "showPole") pole.visible = value;
   }
 
@@ -241,7 +247,7 @@ export function createFlagProp(params = {}) {
       xSegs: p.xSegs,
       ySegs: p.ySegs,
       textureUrl: p.textureUrl,
-      flagColor: p.flagColor,
+      flagColor,
       windIntensity,
       windSpeed,
       windDirection,
@@ -260,12 +266,19 @@ export function createFlagProp(params = {}) {
   return { group, update, dispose, setParam, getParams };
 }
 
-function _loadTexture(mat, url) {
+function _loadTexture(mat, url, state) {
   if (!url) {
-    if (mat.map) { mat.map.dispose(); mat.map = null; }
+    if (mat.map) {
+      mat.map.dispose();
+      mat.map = null;
+    }
+    state.hasTexture = false;
+    mat.color.set(state.flagColor);
     mat.needsUpdate = true;
     return;
   }
+  state.hasTexture = true;
+  mat.color.set(0xffffff);
   new THREE.TextureLoader().load(url, (tex) => {
     tex.colorSpace = THREE.SRGBColorSpace;
     tex.anisotropy = 8;
