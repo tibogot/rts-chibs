@@ -131,10 +131,10 @@ export class RtsUnitInstancer {
             makeInstancedSlot(def, INITIAL_CAPACITY, this.castShadow, this.group),
           ),
           mainRotor: rotors.main.map((def) =>
-            makeInstancedSlot(def, INITIAL_CAPACITY, false, this.group),
+            makeInstancedSlot(def, INITIAL_CAPACITY, this.castShadow, this.group),
           ),
           tailRotor: rotors.tail.map((def) =>
-            makeInstancedSlot(def, INITIAL_CAPACITY, false, this.group),
+            makeInstancedSlot(def, INITIAL_CAPACITY, this.castShadow, this.group),
           ),
           hitbox: new THREE.InstancedMesh(hitboxGeo, _hitboxMat, INITIAL_CAPACITY),
           hitboxGeo,
@@ -157,6 +157,8 @@ export class RtsUnitInstancer {
     this.castShadow = !!on;
     for (const pool of this.pools.values()) {
       for (const slot of pool.bodySlots) slot.im.castShadow = this.castShadow;
+      for (const slot of pool.mainRotor) slot.im.castShadow = this.castShadow;
+      for (const slot of pool.tailRotor) slot.im.castShadow = this.castShadow;
     }
   }
 
