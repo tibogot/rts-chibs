@@ -4,8 +4,8 @@
 import { createFlagProp, FLAG_DEFAULTS } from "./flagFactory.js";
 
 export const RTS_FLAG_DEFAULTS = {
-  clothWidth: 5.25,
-  clothHeight: 3.45,
+  clothWidth: 3.5,
+  clothHeight: 4.0,
   poleHeight: 10.5,
   poleRadius: 0.096,
   xSegs: 10,
