@@ -8165,7 +8165,12 @@
                   "artillery",
                   "helicopter",
                 ];
-          for (const t of rosterTypes) {
+          const types =
+            faction === "enemy" &&
+            !structureSys.hasFaction("enemy", "helipad")
+              ? rosterTypes.filter((t) => t !== "helicopter")
+              : rosterTypes;
+          for (const t of types) {
             const n = Math.max(0, Math.round((PARAMS.army[t] | 0) * armyScale));
             for (let i = 0; i < n; i++) roster.push(t);
           }
@@ -9801,6 +9806,7 @@
             "tank",
             "artillery",
             "rocketLauncher",
+            "helicopter",
           ]) {
             const w = Math.max(0, weights[type] ?? 0);
             for (let i = 0; i < w; i++) choices.push(type);
@@ -10025,12 +10031,16 @@
         const _proj = new THREE.Vector3();
 
         function pickPlayerUnit(cx, cy) {
+          const structureUnder = pickPlayerStructure(cx, cy);
           syncCameraForPick();
           raycaster.setFromCamera(screenToNDC(cx, cy), camera);
           const hits = raycaster.intersectObjects(unitPickTargets(), false);
           for (const h of hits) {
             const u = resolveUnitPick(h);
-            if (u?.faction === "player" && !u.dead) return u;
+            if (u?.faction === "player" && !u.dead) {
+              if (structureUnder && isFlyingUnit(u)) continue;
+              return u;
+            }
           }
           let best = null;
           let bestD2 = Infinity;
@@ -10045,14 +10055,18 @@
             const dx = sx - cx;
             const dy = sy - cy;
             const d2 = dx * dx + dy * dy;
-            const grab =
+            let grab =
               PICK_SCREEN_PX *
               (u.squad ? 1.25 : (UNIT_TYPES[u.type]?.ringScale ?? 1));
+            if (isFlyingUnit(u)) {
+              grab *= structureUnder ? 0.42 : 0.78;
+            }
             if (d2 <= grab * grab && d2 < bestD2) {
               bestD2 = d2;
               best = u;
             }
           }
+          if (best && structureUnder && isFlyingUnit(best)) return null;
           return best;
         }
 
@@ -10063,6 +10077,22 @@
             if (g) issueBuild(placementMode.buildingType, g.x, g.z);
             return;
           }
+          if (!additive) {
+            const st = pickPlayerStructure(cx, cy);
+            if (st) {
+              clearSelection();
+              openStructPanel(st);
+              closeReqPanel();
+              updateCountUI();
+              return;
+            }
+            if (pickPlayerBase(cx, cy)) {
+              closeStructPanel();
+              openReqPanel();
+              updateCountUI();
+              return;
+            }
+          }
           const unit = pickPlayerUnit(cx, cy);
           if (unit) {
             if (!additive) clearSelection();
@@ -10071,21 +10101,6 @@
             closeStructPanel();
             updateCountUI();
             return;
-          }
-          if (!additive && pickPlayerBase(cx, cy)) {
-            closeStructPanel();
-            openReqPanel();
-            updateCountUI();
-            return;
-          }
-          if (!additive) {
-            const st = pickPlayerStructure(cx, cy);
-            if (st) {
-              clearSelection();
-              openStructPanel(st);
-              updateCountUI();
-              return;
-            }
           }
           closeReqPanel();
           closeStructPanel();

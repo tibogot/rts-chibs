@@ -81,7 +81,8 @@ export function factionHasStructure(structures, faction, buildingType) {
 
 export function enemyRequiredProductionTypes(difficulty = "normal") {
   const types = ["barracks", "warFactory"];
-  if (difficulty === "hard") types.push("helipad");
+  // Helipad required whenever the enemy roster includes air units (normal+).
+  if (difficulty === "hard" || difficulty === "normal") types.push("helipad");
   return types;
 }
 
