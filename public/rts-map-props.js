@@ -11,12 +11,85 @@ export const RTS_MAP_PROPS_DEFAULTS = {
   roads: false,
   ruins: true,
   tankTraps: true,
-  wire: true,
+  wire: false,
   containers: true,
   radioStations: true,
   roadWidth: 1,
   ruinScale: 1,
 };
+
+/**
+ * Catalog of map props that stamp purple (NAV_BLOCK.PROP) when Show grid is on.
+ * @param {object} layout
+ * @param {object} [config]
+ * @returns {{ category: string, entries: { id: string, where: string, shape: string }[] }[]}
+ */
+export function listPurpleNavPropSources(
+  layout = RTS_MAP_PROP_LAYOUT,
+  config = RTS_MAP_PROPS_DEFAULTS,
+) {
+  const fmt = (x, z) => `(${Math.round(x)}, ${Math.round(z)})`;
+  const out = [];
+
+  if (config.ruins !== false) {
+    out.push({
+      category: "Ruin clusters (rubble boxes)",
+      entries: (layout.ruinClusters ?? []).map((c) => ({
+        id: c.id,
+        where: fmt(c.x, c.z),
+        shape: `circle per piece · ${c.pieces?.length ?? 0} pieces`,
+      })),
+    });
+  }
+
+  if (config.tankTraps !== false) {
+    out.push({
+      category: "Tank traps (hedgehog GLB)",
+      entries: (layout.tankTrapLines ?? []).map((line, i) => ({
+        id: `trap-line-${i + 1}`,
+        where: fmt(line.x, line.z),
+        shape: `${line.count} circles along line · rot ${((line.rot ?? 0) * (180 / Math.PI)).toFixed(0)}°`,
+      })),
+    });
+  }
+
+  if (config.wire !== false) {
+    out.push({
+      category: "Wire fences (barbed wire + posts)",
+      entries: (layout.wireLines ?? []).map((w) => ({
+        id: w.id,
+        where: w.points?.length
+          ? `${fmt(w.points[0][0], w.points[0][1])} → ${fmt(w.points[w.points.length - 1][0], w.points[w.points.length - 1][1])}`
+          : "—",
+        shape: `purple strip along fence · half-width ${w.halfWidth ?? 1.2}m`,
+      })),
+    });
+  }
+
+  if (config.containers !== false) {
+    out.push({
+      category: "Shipping containers (GLB)",
+      entries: (layout.containerClusters ?? []).map((cl) => ({
+        id: cl.id,
+        where: fmt(cl.x, cl.z),
+        shape: `circle per container · ${cl.items?.length ?? 0} boxes`,
+      })),
+    });
+  }
+
+  if (config.radioStations !== false) {
+    out.push({
+      category: "Radio stations (GLB mast)",
+      entries: (layout.radioStations ?? []).map((st, i) => ({
+        id: `radio-${i + 1}`,
+        where: fmt(st.x, st.z),
+        shape: "circle under mast footprint",
+      })),
+    });
+  }
+
+  return out;
+}
 
 /** Authored placements tuned for RTS_MAP_SIZE ~1440, bases at z ≈ ±528. */
 export const RTS_MAP_PROP_LAYOUT = {
@@ -243,20 +316,21 @@ export const RTS_MAP_PROP_LAYOUT = {
 /** Terrain flatten pads for GLB field props (smooth pad before placement). */
 export function getRtsMapPropFlattenPads(layout = RTS_MAP_PROP_LAYOUT) {
   const pads = [];
-  for (const st of layout.radioStations ?? []) {
-    pads.push({
-      x: st.x,
-      z: st.z,
-      radius: st.flattenR ?? 38,
-      core: st.flattenCore ?? 0.6,
-    });
-  }
+  // Clusters first — radio pads win at mast sites (larger, final stamp).
   for (const cl of layout.containerClusters ?? []) {
     pads.push({
       x: cl.x,
       z: cl.z,
       radius: cl.flattenR ?? 22,
       core: cl.flattenCore ?? 0.58,
+    });
+  }
+  for (const st of layout.radioStations ?? []) {
+    pads.push({
+      x: st.x,
+      z: st.z,
+      radius: st.flattenR ?? 38,
+      core: st.flattenCore ?? 0.6,
     });
   }
   return pads;
@@ -351,7 +425,8 @@ function buildContainerCluster(group, cluster, getHeight, out) {
       null,
     );
     if (!fp) continue;
-    out.navCircles.push({ x: fp.x, z: fp.z, r: fp.r * 0.82 });
+    // Tighter than bbox — clearance is added again when stamping the nav grid.
+    out.navCircles.push({ x: fp.x, z: fp.z, r: fp.r * 0.68 });
     out.pushCircles.push({ x: fp.x, z: fp.z, r: fp.r });
     out.coverPieces.push({
       x: fp.x,
@@ -373,9 +448,10 @@ function buildRadioStations(group, stations, getHeight, out) {
       getHeight,
       null,
       null,
+      { useFootprintSnap: true },
     );
     if (!fp) continue;
-    out.navCircles.push({ x: fp.x, z: fp.z, r: fp.r * 0.9 });
+    out.navCircles.push({ x: fp.x, z: fp.z, r: fp.r * 0.74 });
     out.pushCircles.push({ x: fp.x, z: fp.z, r: fp.r + 0.5 });
     out.coverPieces.push({
       x: fp.x,
@@ -584,8 +660,6 @@ function buildWireLine(group, line, mats, getHeight, out) {
     cap.castShadow = true;
     group.add(cap);
 
-    out.navCircles.push({ x, z, r: hw + 0.35 });
-    out.pushCircles.push({ x, z, r: hw + 0.5 });
     out.coverPieces.push({
       x,
       z,
@@ -636,7 +710,7 @@ function buildWireLine(group, line, mats, getHeight, out) {
       group.add(spur);
     }
 
-    out.navSegments.push({ x0, z0, x1, z1, halfWidth: hw });
+    out.navSegments.push({ x0, z0, x1, z1, halfWidth: hw + 0.45 });
   }
 }
 
@@ -901,7 +975,8 @@ export function createRtsMapProps(scene, opts = {}) {
             mats,
             getHeight,
           );
-          state.navCircles.push(fp);
+          // Tighter than cover disk — clearance is added when stamping the grid.
+          state.navCircles.push({ x: fp.x, z: fp.z, r: fp.r * 0.68 });
           state.pushCircles.push({ x: fp.x, z: fp.z, r: fp.r });
           state.coverPieces.push(fp);
         }

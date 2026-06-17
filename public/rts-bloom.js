@@ -15,8 +15,9 @@ import {
 
 /** HDR multipliers for the emissive MRT buffer (not display brightness). */
 export const RTS_BLOOM_SCALE = {
-  ui: 0.62, // HQ pad ring, capture progress ring
-  beacon: 1.2, // HQ landmark cylinder
+  ui: 1.05, // HQ pad ring, capture node pad/rim
+  beacon: 1.85, // HQ landmark cylinder, checkpoint mast
+  nodeCapture: 1.35, // capture progress ring while capping
   muzzle: 2.6, // brief muzzle flash
   tracer: 1.9, // hitscan streak
   impact: 2.4, // micro hit spark (scout/tank)

@@ -299,6 +299,60 @@ function applyTerrainCraters(heights, seg, vertsX, half, size, craters = []) {
   }
 }
 
+function flattenPadBlendWeight(t, coreFrac = 0.55) {
+  if (t <= coreFrac) return 1;
+  const u = (t - coreFrac) / Math.max(1e-4, 1 - coreFrac);
+  return 1 - u * u * (3 - 2 * u);
+}
+
+function flattenPadTargetHeight(heights, seg, vertsX, half, size, pad) {
+  if (pad.height != null && Number.isFinite(pad.height)) return pad.height;
+  const r = pad.radius ?? 34;
+  const r2 = r * r;
+  let maxH = -Infinity;
+  for (let zi = 0; zi <= seg; zi++) {
+    for (let xi = 0; xi <= seg; xi++) {
+      const x = -half + (xi / seg) * size;
+      const z = -half + (zi / seg) * size;
+      const dx = x - pad.x;
+      const dz = z - pad.z;
+      if (dx * dx + dz * dz > r2) continue;
+      maxH = Math.max(maxH, heights[zi * vertsX + xi]);
+    }
+  }
+  return Number.isFinite(maxH) ? maxH : 0;
+}
+
+/** Smooth flatten pad into an existing heightfield (no full re-bake). */
+export function stampFlattenPadIntoHeights(
+  heights,
+  seg,
+  vertsX,
+  half,
+  size,
+  pad,
+) {
+  const targetH = flattenPadTargetHeight(heights, seg, vertsX, half, size, pad);
+  const core = pad.core ?? 0.55;
+  const r = pad.radius ?? 34;
+  const r2 = r * r;
+  for (let zi = 0; zi <= seg; zi++) {
+    for (let xi = 0; xi <= seg; xi++) {
+      const x = -half + (xi / seg) * size;
+      const z = -half + (zi / seg) * size;
+      const dx = x - pad.x;
+      const dz = z - pad.z;
+      const d2 = dx * dx + dz * dz;
+      if (d2 >= r2) continue;
+      const d = Math.sqrt(d2);
+      const t = d / r;
+      const w = flattenPadBlendWeight(t, core);
+      const i = zi * vertsX + xi;
+      heights[i] = heights[i] * (1 - w) + targetH * w;
+    }
+  }
+}
+
 function pickShape(params) {
   const out = {};
   for (const k of SHAPE_KEYS) out[k] = params[k] ?? RTS_TERRAIN_DEFAULTS[k];
@@ -1237,6 +1291,7 @@ export function syncRtsTerrainPathMask(terrainData, pathMaskTex, half, size) {
 /** Bake height samples + sampler (no GPU geometry allocation). */
 function bakeTerrainHeightfield(size, segments, params = {}) {
   const ts = pickShape({ ...RTS_TERRAIN_DEFAULTS, ...params });
+  const flatMode = params.preset === "flat";
   const perlin = new ImprovedNoise(createSeededRandom(4242));
 
   function mountainRelief(x, z) {
@@ -1250,6 +1305,7 @@ function bakeTerrainHeightfield(size, segments, params = {}) {
   }
 
   function rawHeight(x, z, half) {
+    if (flatMode) return 0;
     const nx = x * ts.fbmScale;
     const nz = z * ts.fbmScale;
     const oct = THREE.MathUtils.clamp(Math.round(ts.octaves), 1, 14);
@@ -1384,48 +1440,9 @@ function bakeTerrainHeightfield(size, segments, params = {}) {
     core: pad.core ?? 0.55,
   }));
 
-  function padTargetHeight(pad) {
-    if (pad.height != null && Number.isFinite(pad.height)) return pad.height;
-    const r = pad.radius ?? 34;
-    const r2 = r * r;
-    let maxH = -Infinity;
-    for (let zi = 0; zi <= seg; zi++) {
-      for (let xi = 0; xi <= seg; xi++) {
-        const { x, z } = gridWorld(xi, zi);
-        const dx = x - pad.x;
-        const dz = z - pad.z;
-        if (dx * dx + dz * dz > r2) continue;
-        maxH = Math.max(maxH, heights[gridIdx(xi, zi)]);
-      }
-    }
-    return Number.isFinite(maxH) ? maxH : 0;
-  }
-
-  function padBlendWeight(t, coreFrac = 0.55) {
-    if (t <= coreFrac) return 1;
-    const u = (t - coreFrac) / Math.max(1e-4, 1 - coreFrac);
-    return 1 - u * u * (3 - 2 * u);
-  }
-
   function applyFlattenPads() {
     for (const pad of flattenPads) {
-      const targetH = padTargetHeight(pad);
-      const core = pad.core ?? 0.55;
-      for (let zi = 0; zi <= seg; zi++) {
-        for (let xi = 0; xi <= seg; xi++) {
-          const { x, z } = gridWorld(xi, zi);
-          const dx = x - pad.x;
-          const dz = z - pad.z;
-          const r = pad.radius;
-          const d2 = dx * dx + dz * dz;
-          if (d2 >= r * r) continue;
-          const d = Math.sqrt(d2);
-          const t = d / r;
-          const w = padBlendWeight(t, core);
-          const i = gridIdx(xi, zi);
-          heights[i] = heights[i] * (1 - w) + targetH * w;
-        }
-      }
+      stampFlattenPadIntoHeights(heights, seg, vertsX, half, size, pad);
     }
   }
 
@@ -1632,6 +1649,30 @@ export async function rebuildRtsTerrainHeight(
  * Deform terrain in-place for an artillery crater (cheap — no full re-bake).
  * @returns {boolean} true if the mesh was updated
  */
+/**
+ * Deform terrain in-place for a flatten pad (helipad, HQ pad, etc.).
+ * @returns {boolean} true if the mesh was updated
+ */
+export function stampRtsTerrainFlattenPad(terrainData, pad) {
+  if (!terrainData?.heights?.length || !terrainData.mesh?.geometry || !pad) {
+    return false;
+  }
+  stampFlattenPadIntoHeights(
+    terrainData.heights,
+    terrainData.seg,
+    terrainData.vertsX,
+    terrainData.half,
+    terrainData.mapSize,
+    pad,
+  );
+  return applyHeightsToGeometry(
+    terrainData.mesh.geometry,
+    terrainData.heights,
+    terrainData.seg,
+    terrainData.vertsX,
+  );
+}
+
 export function stampRtsTerrainCrater(terrainData, x, z, opts = {}) {
   if (!terrainData?.heights?.length || !terrainData.mesh?.geometry) return false;
   const crater = {
