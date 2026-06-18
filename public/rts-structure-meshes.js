@@ -270,6 +270,32 @@ export function buildTurretMesh(accent, trim) {
   return { group: g, head };
 }
 
+function buildRadioStationMesh() {
+  const glb = createRtsBuildingGlbMesh("radiostation");
+  if (glb) return { group: glb, turretHead: null };
+  const g = new THREE.Group();
+  const padMat = new THREE.MeshStandardMaterial({
+    color: 0x4a4e52,
+    roughness: 0.9,
+    metalness: 0.08,
+  });
+  const mastMat = new THREE.MeshStandardMaterial({
+    color: 0x8a9098,
+    roughness: 0.55,
+    metalness: 0.35,
+  });
+  const add = (mesh, px, py, pz) => {
+    mesh.position.set(px, py, pz);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    g.add(mesh);
+  };
+  add(new THREE.Mesh(new THREE.CylinderGeometry(3.8, 4.2, 0.35, 16), padMat), 0, 0.18, 0);
+  add(new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.32, 8.5, 8), mastMat), 0, 4.4, 0);
+  add(new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.35, 1.2), mastMat), 0.55, 7.2, 0);
+  return { group: g, turretHead: null };
+}
+
 export function buildStructureMesh(faction, buildingType, colors) {
   if (buildingType === "barracks") {
     return { group: buildBarracksMesh(faction, colors), turretHead: null };
@@ -282,6 +308,15 @@ export function buildStructureMesh(faction, buildingType, colors) {
   }
   if (buildingType === "sandbags") {
     return { group: buildSandbagsMesh(), turretHead: null };
+  }
+  if (buildingType === "radioStation") {
+    return buildRadioStationMesh();
+  }
+  if (buildingType === "aaTurret") {
+    const { accent, trim } = colors;
+    const { group, head } = buildTurretMesh(accent, trim);
+    head.position.y = 0.72;
+    return { group, turretHead: head };
   }
   const { accent, trim } = colors;
   const { group, head } = buildTurretMesh(accent, trim);

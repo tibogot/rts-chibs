@@ -13,7 +13,7 @@ export const RTS_MAP_PROPS_DEFAULTS = {
   tankTraps: true,
   wire: false,
   containers: true,
-  radioStations: true,
+  radioStations: false,
   roadWidth: 1,
   ruinScale: 1,
 };
@@ -426,7 +426,7 @@ function buildContainerCluster(group, cluster, getHeight, out) {
     );
     if (!fp) continue;
     // Tighter than bbox — clearance is added again when stamping the nav grid.
-    out.navCircles.push({ x: fp.x, z: fp.z, r: fp.r * 0.68 });
+    out.navCircles.push({ x: fp.x, z: fp.z, r: fp.r * 0.74 });
     out.pushCircles.push({ x: fp.x, z: fp.z, r: fp.r });
     out.coverPieces.push({
       x: fp.x,
@@ -976,7 +976,7 @@ export function createRtsMapProps(scene, opts = {}) {
             getHeight,
           );
           // Tighter than cover disk — clearance is added when stamping the grid.
-          state.navCircles.push({ x: fp.x, z: fp.z, r: fp.r * 0.68 });
+          state.navCircles.push({ x: fp.x, z: fp.z, r: fp.r * 0.74 });
           state.pushCircles.push({ x: fp.x, z: fp.z, r: fp.r });
           state.coverPieces.push(fp);
         }

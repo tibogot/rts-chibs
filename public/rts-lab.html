@@ -2066,6 +2066,7 @@
         enemyPickRequiresStructure,
         updateEnemyBaseExpansion,
         createEnemyExpansionState,
+        findPlayerRadioStation,
       } from "./rts-enemy-economy.js";
       import {
         isEnemyAssaultUnit,
@@ -2081,6 +2082,12 @@
         planEnemyHarvestEscorts,
         escortGuardPoint,
       } from "./rts-enemy-harvest.js";
+      import {
+        scaleMatchupDamage,
+        describeMatchups,
+        canShooterTarget,
+        isAirUnit,
+      } from "./rts-matchups.js";
 
       const DIFFICULTY_PRESETS = {
         easy: {
@@ -2112,6 +2119,8 @@
           artilleryMinSupply: 160,
           artilleryChance: 0.12,
           scoutHarass: 0.2,
+          radioHuntCount: 0,
+          aaBias: 0,
           enemyExpandInterval: 14,
           enemyExpandSupplyBuffer: 55,
           rallyDepth: 28,
@@ -2151,6 +2160,8 @@
           artilleryMinSupply: 110,
           artilleryChance: 0.28,
           scoutHarass: 0.32,
+          radioHuntCount: 1,
+          aaBias: 0.35,
           enemyExpandInterval: 10,
           enemyExpandSupplyBuffer: 35,
           rallyDepth: 32,
@@ -2190,6 +2201,8 @@
           artilleryMinSupply: 75,
           artilleryChance: 0.42,
           scoutHarass: 0.45,
+          radioHuntCount: 2,
+          aaBias: 0.55,
           enemyExpandInterval: 7,
           enemyExpandSupplyBuffer: 22,
           rallyDepth: 36,
@@ -2501,6 +2514,21 @@
               fireRate: 1.05,
               turnRate: 4.5,
             },
+            aaTurret: {
+              label: "AA Turret",
+              icon: "AA",
+              cost: 105,
+              buildTime: 11,
+              footprint: 5,
+              flattenRadius: 6,
+              hp: 260,
+              coverTier: "yellow",
+              range: 44,
+              damage: 17,
+              fireRate: 1.35,
+              turnRate: 5.5,
+              antiAirOnly: true,
+            },
             sandbags: {
               label: "Sandbags",
               icon: "SB",
@@ -2510,6 +2538,18 @@
               flattenRadius: 4,
               hp: 160,
               coverTier: "green",
+            },
+            radioStation: {
+              label: "Radio Station",
+              icon: "RS",
+              cost: 100,
+              buildTime: 14,
+              footprint: 8,
+              flattenRadius: 11,
+              hp: 260,
+              coverTier: "yellow",
+              role: "intel",
+              visionRadius: 118,
             },
           },
         },
@@ -4360,6 +4400,9 @@
               z: s.z,
             });
           }
+          if (s.faction === "player" && s.buildingType === "radioStation") {
+            showToast("Radio station destroyed — map intel offline");
+          }
           if (activeStructure === s) closeStructPanel();
           structureSys.kill(s);
           spawnImpact(s.x, s.pos.y + 2, s.z, {
@@ -4898,38 +4941,52 @@
         }
 
         function turretStatsForStructure(s) {
+          const B = buildingDef(s.buildingType);
           const T0 = buildingDef("turret");
           return {
-            range: T0.range,
-            damage: T0.damage,
-            fireRate: T0.fireRate,
-            turnRate: T0.turnRate,
+            range: B?.range ?? T0.range,
+            damage: B?.damage ?? T0.damage,
+            fireRate: B?.fireRate ?? T0.fireRate,
+            turnRate: B?.turnRate ?? T0.turnRate,
+            antiAirOnly: !!B?.antiAirOnly,
+            shooterType: s.buildingType === "aaTurret" ? "aaTurret" : "turret",
           };
+        }
+
+        function pickTurretUnitTarget(s, T, rangeSq) {
+          let best = null;
+          let bestScore = -1;
+          for (const u of units) {
+            if (u.dead || u.faction === s.faction) continue;
+            if (!canShooterTarget(T.shooterType, u)) continue;
+            if (T.antiAirOnly && !isAirUnit(u)) continue;
+            if (!canFactionSee(s.faction, u.pos.x, u.pos.z)) continue;
+            const dx = u.pos.x - s.x;
+            const dz = u.pos.z - s.z;
+            const d2 = dx * dx + dz * dz;
+            if (d2 > rangeSq) continue;
+            let score = rangeSq - d2;
+            if (!T.antiAirOnly && isAirUnit(u)) score += rangeSq * 0.55;
+            if (score > bestScore) {
+              bestScore = score;
+              best = u;
+            }
+          }
+          return best;
         }
 
         function updateStructureTurrets(dt) {
           if (game.over) return;
           for (const s of STRUCTURES) {
-            if (s.dead || s.buildingType !== "turret" || !s.turretHead)
-              continue;
+            if (s.dead || !s.turretHead) continue;
+            const B = buildingDef(s.buildingType);
+            if (!B?.range) continue;
             if (s.faction === "enemy" && !isEnemyLive()) continue;
             const T = turretStatsForStructure(s);
             const rangeSq = T.range * T.range;
             s.turretCooldown -= dt;
             _turretFrom.set(s.x, s.pos.y + 1.05, s.z);
-            let best = null;
-            let bestD = rangeSq;
-            for (const u of units) {
-              if (u.dead || u.faction === s.faction) continue;
-              if (!canFactionSee(s.faction, u.pos.x, u.pos.z)) continue;
-              const dx = u.pos.x - s.x;
-              const dz = u.pos.z - s.z;
-              const d2 = dx * dx + dz * dz;
-              if (d2 <= bestD) {
-                bestD = d2;
-                best = u;
-              }
-            }
+            const best = pickTurretUnitTarget(s, T, rangeSq);
             if (!best) continue;
             _turretTo.set(best.pos.x, best.pos.y + 1.05, best.pos.z);
             _turretLocal.set(_turretTo.x - s.x, 0, _turretTo.z - s.z);
@@ -4950,7 +5007,10 @@
               best.pos.x,
               best.pos.y + 1,
               best.pos.z,
-              damageShooterCtx(s, { suppressive: true }),
+              damageShooterCtx(s, {
+                suppressive: true,
+                shooterType: T.shooterType,
+              }),
             );
             sfx.play("turret");
           }
@@ -5035,7 +5095,11 @@
               createStructure("player", job.buildingType, job.x, job.z);
               u.buildJob = null;
               refreshBuildButtons();
-              showToast(`${buildingDef(job.buildingType).label} complete`);
+              if (job.buildingType === "radioStation") {
+                showToast("Radio station online — map intel + fog vision");
+              } else {
+                showToast(`${buildingDef(job.buildingType).label} complete`);
+              }
               sfx.play("spawn");
             }
           }
@@ -5201,6 +5265,12 @@
           let r = (B?.footprint ?? 6) + PARAMS.nav.clearance;
           if (buildingType === "helipad") {
             r = Math.max(r, (B?.flattenRadius ?? 13) + PARAMS.nav.clearance);
+          }
+          if (buildingType === "radioStation") {
+            r = Math.max(r, (B?.flattenRadius ?? 11) + PARAMS.nav.clearance);
+          }
+          if (buildingType === "aaTurret") {
+            r = Math.max(r, (B?.flattenRadius ?? 6) + PARAMS.nav.clearance);
           }
           return r;
         }
@@ -5603,6 +5673,20 @@
               stampVision(u.pos.x, u.pos.z, r, null, fog.enemyVisible);
             }
           }
+          for (const s of STRUCTURES) {
+            if (s.dead || s.faction !== "player") continue;
+            const vr = buildingDef(s.buildingType)?.visionRadius ?? 0;
+            if (vr > 0) {
+              stampVision(s.x, s.z, vr, fog.explored, fog.visible);
+            }
+          }
+          for (const s of STRUCTURES) {
+            if (s.dead || s.faction !== "enemy") continue;
+            const vr = buildingDef(s.buildingType)?.visionRadius ?? 0;
+            if (vr > 0) {
+              stampVision(s.x, s.z, vr * 0.9, null, fog.enemyVisible);
+            }
+          }
           updateEnemyIntel();
           updateFogTexture();
           updateFogEntityVisibility();
@@ -5670,10 +5754,24 @@
           const T = UNIT_TYPES[u.type];
           if (u.type === "helicopter") return 2.8;
           if (u.type === "harvester" || u.type === "bulldozer") return 3.65;
-          if (u.type === "rocketLauncher" || u.type === "artillery") return 3.65;
+          if (u.type === "rocketLauncher" || u.type === "artillery") return 3.35;
           if (u.type === "tank") return 3.1;
           if (T?.squad) return 2.6;
           return 2.0;
+        }
+
+        function unitIsIndirectFire(u) {
+          return u.type === "artillery" || u.type === "rocketLauncher";
+        }
+
+        function unitHoldsToFire(u) {
+          const t = u.attackTarget;
+          if (!t || t.dead || !unitIsIndirectFire(u)) return false;
+          const tx = t.pos?.x ?? t.x;
+          const tz = t.pos?.z ?? t.z;
+          const dx = tx - u.pos.x;
+          const dz = tz - u.pos.z;
+          return dx * dx + dz * dz <= u.range * u.range;
         }
 
         function unitIsInfantry(u) {
@@ -5689,6 +5787,23 @@
           );
         }
 
+        /** Max hull overlap with props before a spot is rejected (wide = stricter). */
+        function unitNavMaxViolation(u) {
+          if (unitIsWide(u)) return 0.042;
+          if (unitIsInfantry(u)) return 0.07;
+          return 0.06;
+        }
+
+        function unitBodyNavMul(u) {
+          return unitIsWide(u) ? 1.05 : 0.82;
+        }
+
+        function unitPropNavPad(u) {
+          const clr = PARAMS.nav.clearance;
+          if (unitIsWide(u)) return clr * 0.34;
+          return clr * 0.18;
+        }
+
         function unitStuckThreshold(u) {
           if (unitIsInfantry(u)) return 0.32;
           if (unitIsWide(u)) return 0.38;
@@ -5697,7 +5812,7 @@
 
         function unitMaxStuckEscapes(u) {
           if (unitIsInfantry(u)) return 2;
-          if (unitIsWide(u)) return 3;
+          if (unitIsWide(u)) return unitIsIndirectFire(u) ? 5 : 4;
           return 4;
         }
 
@@ -5727,7 +5842,7 @@
         function isWalkableForUnit(u, x, z) {
           if (!isWalkableWorld(x, z)) return false;
           if (!u || u.dead || isFlyingUnit(u)) return true;
-          return unitNavViolationDepth(u, x, z) <= 0.07;
+          return unitNavViolationDepth(u, x, z) <= unitNavMaxViolation(u);
         }
 
         function nearestClearWorld(x, z, okFn, maxRings = 28) {
@@ -5782,6 +5897,8 @@
           let depth = 0;
           const clr = PARAMS.nav.clearance;
           const body = unitBodyRadius(u);
+          const bodyMul = unitBodyNavMul(u);
+          const propPad = unitPropNavPad(u);
           const wc = worldToCell(x, z);
           if (inBounds(wc.c, wc.r) && isBlockedCell(wc.c, wc.r)) {
             depth += nav.cell * 0.42;
@@ -5789,13 +5906,13 @@
           if (!unitSlopeOk(x, z)) depth += 1.6;
           const pushCircle = (ox, oz, or, pad) => {
             const d = Math.hypot(x - ox, z - oz);
-            const minD = or + pad + body * 0.82;
+            const minD = or + pad + body * bodyMul;
             if (d < minD) depth += minD - d;
           };
           for (const o of OBSTACLES) pushCircle(o.x, o.z, o.r, clr * 0.42);
           if (mapProps?.navCircles) {
             for (const o of mapProps.navCircles) {
-              pushCircle(o.x, o.z, o.r, clr * 0.18);
+              pushCircle(o.x, o.z, o.r, propPad);
             }
           }
           for (const b of STRUCTURE_FOOTPRINTS) {
@@ -5935,6 +6052,12 @@
           return resolveFormationGoal(f.destX, f.destZ, f.ox, f.oz, u);
         }
 
+        function aiOrderGoal(u) {
+          const o = u.aiOrder;
+          if (!o || o.type === "wait") return null;
+          return { x: o.x, z: o.z };
+        }
+
         /** Stuck formation members get a short hop to a slot near the group, then resume the real goal. */
         function tickMoveFormations() {
           for (const u of units) {
@@ -5976,9 +6099,10 @@
         /** Units that lost their path but still have a move order — repath toward the goal. */
         function tickStragglerRepath() {
           for (const u of units) {
-            if (u.dead || u.faction !== "player" || u.hold || u.path?.length) {
+            if (u.dead || u.hold || u.path?.length) {
               continue;
             }
+            if (u.faction !== "player" && !u.aiOrder) continue;
             if (
               u.type === "harvester" &&
               (u.harvestState === "harvesting" ||
@@ -5986,7 +6110,7 @@
             ) {
               continue;
             }
-            const goal = u._pathGoal ?? desiredFormationGoal(u);
+            const goal = u._pathGoal ?? desiredFormationGoal(u) ?? aiOrderGoal(u);
             if (!goal) continue;
             if (atFormationDest(u)) {
               clearMoveForm(u);
@@ -6026,7 +6150,7 @@
             const pathGoal = u.path?.[u.path.length - 1];
             const formGoal = desiredFormationGoal(u);
             const pending = u._pathGoal;
-            const goal = pending ?? formGoal ?? pathGoal;
+            const goal = pending ?? formGoal ?? aiOrderGoal(u) ?? pathGoal;
             if (!goal) continue;
             if (formGoal && atFormationDest(u)) continue;
             const remain = Math.hypot(goal.x - u.pos.x, goal.z - u.pos.z);
@@ -6042,13 +6166,20 @@
               continue;
             }
             u.idleStuckTimer = (u.idleStuckTimer ?? 0) + dt;
-            const limit = unitIsWide(u) ? 1.0 : unitIsInfantry(u) ? 1.6 : 2.2;
+            const limit = unitIsIndirectFire(u)
+              ? 0.62
+              : unitIsWide(u)
+                ? 1.0
+                : unitIsInfantry(u)
+                  ? 1.6
+                  : 2.2;
             if (u.idleStuckTimer < limit) continue;
             u.idleStuckTimer = 0;
             if (unitNavViolationDepth(u, u.pos.x, u.pos.z) > 0.04) {
               forceUnstickUnit(u, goal);
-            } else if ((u.pathRefresh ?? 0) <= 0) {
-              requestUnitPath(u, u.pos.x, u.pos.z, goal.x, goal.z, 0.12, true);
+            } else             if ((u.pathRefresh ?? 0) <= 0) {
+              const cd = u.type === "artillery" ? 0.95 : 0.55;
+              requestUnitPath(u, u.pos.x, u.pos.z, goal.x, goal.z, cd, true);
             }
           }
         }
@@ -6170,7 +6301,7 @@
           for (const o of OBSTACLES) consider(o.x, o.z, o.r, 0.9);
           if (mapProps?.navCircles) {
             for (const o of mapProps.navCircles) {
-              consider(o.x, o.z, o.r, PARAMS.nav.clearance * 0.25);
+              consider(o.x, o.z, o.r, unitPropNavPad(u));
             }
           }
           for (const b of STRUCTURE_FOOTPRINTS) {
@@ -6207,6 +6338,7 @@
             if (!canTraverseEdge(from.c, from.r, nc, nr)) continue;
             const ctr = cellCenter(nc, nr);
             if (forestOrPropBlocked(ctr.x, ctr.z)) continue;
+            if (!isWalkableForUnit(u, ctr.x, ctr.z)) continue;
             const vx = ctr.x - u.pos.x;
             const vz = ctr.z - u.pos.z;
             const vl = Math.hypot(vx, vz);
@@ -6290,8 +6422,55 @@
           if (!unitSlopeOk(toX, toZ) && unitSlopeOk(fromX, fromZ)) return false;
           const fromDepth = unitNavViolationDepth(u, fromX, fromZ);
           const toDepth = unitNavViolationDepth(u, toX, toZ);
-          if (fromDepth <= 0.06) return toDepth <= 0.06;
+          const maxV = unitNavMaxViolation(u);
+          if (fromDepth <= maxV) return toDepth <= maxV;
           return toDepth < fromDepth - 0.03;
+        }
+
+        /** Hull-aware line test — rejects shortcuts that clip props between grid cells. */
+        function lineClearForUnit(u, x0, z0, x1, z1) {
+          if (!lineClearWorld(x0, z0, x1, z1)) return false;
+          const dx = x1 - x0;
+          const dz = z1 - z0;
+          const len = Math.hypot(dx, dz);
+          if (len < 1e-4) {
+            return unitNavViolationDepth(u, x0, z0) <= unitNavMaxViolation(u);
+          }
+          const bodyStep = unitIsWide(u)
+            ? Math.max(1.1, nav.cell * 0.34)
+            : Math.max(0.85, nav.cell * 0.42);
+          const steps = Math.max(2, Math.ceil(len / bodyStep));
+          const maxV = unitNavMaxViolation(u);
+          for (let i = 0; i <= steps; i++) {
+            const t = i / steps;
+            const x = x0 + dx * t;
+            const z = z0 + dz * t;
+            if (unitNavViolationDepth(u, x, z) > maxV) return false;
+          }
+          return true;
+        }
+
+        /** String-pull A* waypoints using hull clearance (container yards / narrow lanes). */
+        function smoothPathForUnit(u, sx, sz, pts) {
+          if (!pts?.length) return pts;
+          const out = [];
+          let fromX = sx;
+          let fromZ = sz;
+          let i = 0;
+          while (i < pts.length) {
+            let j = pts.length - 1;
+            while (
+              j > i &&
+              !lineClearForUnit(u, fromX, fromZ, pts[j].x, pts[j].z)
+            ) {
+              j--;
+            }
+            out.push(pts[j]);
+            fromX = pts[j].x;
+            fromZ = pts[j].z;
+            i = j + 1;
+          }
+          return out.length ? out : pts;
         }
 
         // World-space line test — catches shortcuts that clip cliffs between cells.
@@ -6324,10 +6503,11 @@
         function pathForUnit(u, sx, sz, gx, gz) {
           if (isFlyingUnit(u)) return [{ x: gx, z: gz }];
           if (!nav.grid) return [{ x: gx, z: gz }];
-          if (lineClearWorld(sx, sz, gx, gz)) {
+          if (lineClearForUnit(u, sx, sz, gx, gz)) {
             return [{ x: gx, z: gz }];
           }
-          return astar(sx, sz, gx, gz);
+          const raw = astar(sx, sz, gx, gz);
+          return smoothPathForUnit(u, sx, sz, raw);
         }
         // Spiral out to the closest walkable cell (for goals dropped on a rock).
         function nearestFree(c, r) {
@@ -6396,12 +6576,20 @@
           if (!force) pathfindBudget--;
           let sx0 = sx;
           let sz0 = sz;
-          if (u && !isFlyingUnit(u) && !isWalkableWorld(sx0, sz0)) {
-            snapUnitToWalkable(u);
-            sx0 = u.pos.x;
-            sz0 = u.pos.z;
+          let gx0 = gx;
+          let gz0 = gz;
+          if (u && !isFlyingUnit(u)) {
+            if (!isWalkableForUnit(u, sx0, sz0)) {
+              snapUnitToWalkable(u);
+              sx0 = u.pos.x;
+              sz0 = u.pos.z;
+            }
+            const goalRings = unitIsWide(u) ? 38 : 28;
+            const goalSpot = nearestWalkableWorldForUnit(u, gx0, gz0, goalRings);
+            gx0 = goalSpot.x;
+            gz0 = goalSpot.z;
           }
-          u.path = pathForUnit(u, sx0, sz0, gx, gz);
+          u.path = pathForUnit(u, sx0, sz0, gx0, gz0);
           u.pathRefresh = cooldown + Math.random() * 0.28;
           u.pathFailCd = 0;
           return true;
@@ -7169,16 +7357,17 @@
         // data/visual split means combat/movement/AI just read u.<stat>).
         // Each type also has a DISTINCT silhouette (see buildUnitMesh) so you
         // recognise it at a glance, plus a ringScale for the selection ring.
-        // Rock-paper-scissors: scout = fast/weak/short range, tank = balanced,
-        // artillery = slow/long range/high damage/slow reload.
+        // Rock-paper-scissors (see rts-matchups.js): tanks chew infantry/siege,
+        // artillery deletes tanks, rockets/flamers bust buildings & infantry,
+        // scouts chip infantry only, helicopters hunt artillery.
         const UNIT_TYPES = {
           scout: {
             label: "Scout Squad",
             squad: true,
             squadSize: 5,
-            perManHp: 11,
+            perManHp: 10,
             suppressive: true,
-            hp: 55,
+            hp: 50,
             speed: 20,
             range: 16,
             damage: 7,
@@ -7205,11 +7394,11 @@
           tank: {
             label: "Tank",
             suppressive: true,
-            hp: 120,
-            speed: 13,
+            hp: 132,
+            speed: 12,
             range: 24,
-            damage: 18,
-            fireRate: 1.3,
+            damage: 20,
+            fireRate: 1.25,
             sight: 55,
             vision: 50,
             ringScale: 1.0,
@@ -7245,11 +7434,11 @@
           },
           artillery: {
             label: "Artillery",
-            hp: 80,
+            hp: 60,
             speed: 9,
             range: 46,
-            damage: 34,
-            fireRate: 0.5,
+            damage: 40,
+            fireRate: 0.48,
             sight: 60,
             vision: 44,
             ringScale: 1.2,
@@ -7275,11 +7464,11 @@
           rocketLauncher: {
             label: "Rocket Launcher",
             suppressive: true,
-            hp: 72,
+            hp: 68,
             speed: 11,
             range: 34,
-            damage: 26,
-            fireRate: 0.75,
+            damage: 27,
+            fireRate: 0.78,
             sight: 58,
             vision: 50,
             ringScale: 1.15,
@@ -7307,12 +7496,12 @@
             label: "Flame Squad",
             squad: true,
             squadSize: 4,
-            perManHp: 24,
-            hp: 95,
+            perManHp: 20,
+            hp: 80,
             speed: 15,
             range: 13,
-            damage: 5,
-            fireRate: 5,
+            damage: 6,
+            fireRate: 4.8,
             sight: 48,
             vision: 52,
             ringScale: 1.1,
@@ -7345,11 +7534,11 @@
           },
           helicopter: {
             label: "Helicopter",
-            hp: 65,
+            hp: 52,
             speed: 20,
             range: 28,
-            damage: 14,
-            fireRate: 1.8,
+            damage: 15,
+            fireRate: 1.7,
             sight: 62,
             vision: 72,
             ringScale: 9,
@@ -7787,10 +7976,14 @@
         function damageShooterCtx(shooter, opts = {}) {
           if (!shooter) return null;
           const pos = shooter.pos ?? { x: shooter.x, z: shooter.z };
-          const type = shooter.type;
+          const type =
+            opts.shooterType ??
+            shooter.type ??
+            (shooter.kind === "base" ? "turret" : null);
           return {
             x: pos.x,
             z: pos.z,
+            shooterType: type,
             suppressive:
               opts.suppressive ??
               (type ? !!UNIT_TYPES[type]?.suppressive : true),
@@ -8735,15 +8928,19 @@
               tur.group.getWorldPosition(_turretFrom);
               _turretFrom.y += 1.05;
               let best = null;
-              let bestD = rangeSq;
+              let bestScore = -1;
               for (const u of units) {
                 if (u.dead || u.faction === b.faction) continue;
+                if (!canShooterTarget("turret", u)) continue;
                 if (!canFactionSee(b.faction, u.pos.x, u.pos.z)) continue;
                 const dx = u.pos.x - _turretFrom.x;
                 const dz = u.pos.z - _turretFrom.z;
                 const d2 = dx * dx + dz * dz;
-                if (d2 <= bestD) {
-                  bestD = d2;
+                if (d2 > rangeSq) continue;
+                let score = rangeSq - d2;
+                if (isAirUnit(u)) score += rangeSq * 0.5;
+                if (score > bestScore) {
+                  bestScore = score;
                   best = u;
                 }
               }
@@ -8753,8 +8950,10 @@
                 const dx = s.x - _turretFrom.x;
                 const dz = s.z - _turretFrom.z;
                 const d2 = dx * dx + dz * dz;
-                if (d2 <= bestD) {
-                  bestD = d2;
+                if (d2 > rangeSq) continue;
+                const score = rangeSq - d2;
+                if (score > bestScore) {
+                  bestScore = score;
                   best = s;
                 }
               }
@@ -8779,7 +8978,10 @@
                 best.pos.x,
                 best.pos.y + 1,
                 best.pos.z,
-                damageShooterCtx(b, { suppressive: true }),
+                damageShooterCtx(b, {
+                  suppressive: true,
+                  shooterType: "turret",
+                }),
               );
               sfx.play("turret");
             }
@@ -8846,6 +9048,8 @@
           "harvester",
         ];
         const BUILD_TYPES = [
+          "radioStation",
+          "aaTurret",
           "barracks",
           "warFactory",
           "helipad",
@@ -8977,8 +9181,27 @@
           closeStructPanel();
         });
 
+        function playerHasRadioIntel() {
+          return STRUCTURES.some(
+            (s) =>
+              !s.dead &&
+              s.faction === "player" &&
+              s.buildingType === "radioStation",
+          );
+        }
+
         function structureSubText(s) {
           const B = buildingDef(s.buildingType);
+          if (s.buildingType === "radioStation") {
+            const vr = B.visionRadius ?? 118;
+            return `Tactical map · reveals fog (${vr}m)`;
+          }
+          if (s.buildingType === "aaTurret") {
+            return `Anti-air · range ${B.range} · dmg ${B.damage}`;
+          }
+          if (s.buildingType === "turret") {
+            return `Ground + light AA · range ${B.range} · dmg ${B.damage}`;
+          }
           if (s.buildingType === "barracks") {
             return `Heals allies within ${B.healRadius}m`;
           }
@@ -9201,11 +9424,19 @@
             if (u.type === "bulldozer") {
               ccFooterEl.textContent = u.buildJob
                 ? `Building ${buildingDef(u.buildJob.buildingType).label}…`
-                : "Select structure below · click ground to place";
+                : playerHasRadioIntel()
+                  ? "Select structure below · click ground to place"
+                  : "Build a radio station first for map intel";
             } else if (u.flying) {
-              ccFooterEl.textContent = `${Math.ceil(u.hp)}/${u.maxHp} HP · air · rng ${u.range} · dmg ${u.damage}${visNote}`;
+              const counters = describeMatchups(u.type);
+              ccFooterEl.textContent =
+                `${Math.ceil(u.hp)}/${u.maxHp} HP · air · rng ${u.range} · dmg ${u.damage}${visNote}` +
+                (counters.length ? ` · ${counters[0]}` : "");
             } else if (u.range > 0) {
-              ccFooterEl.textContent = `${Math.ceil(u.hp)}/${u.maxHp} HP · rng ${u.range} · dmg ${u.damage}${visNote}`;
+              const counters = describeMatchups(u.type);
+              ccFooterEl.textContent =
+                `${Math.ceil(u.hp)}/${u.maxHp} HP · rng ${u.range} · dmg ${u.damage}${visNote}` +
+                (counters.length ? ` · ${counters[0]}` : "");
             } else {
               ccFooterEl.textContent = `${Math.ceil(u.hp)}/${u.maxHp} HP${visNote}`;
             }
@@ -9836,6 +10067,12 @@
           ).length;
         }
 
+        function playerCombatAirCount() {
+          return units.filter(
+            (u) => !u.dead && u.faction === "player" && isAirUnit(u),
+          ).length;
+        }
+
         function enemyReqChooseTypeRaw() {
           const diff = getDifficulty();
           const E = PARAMS.requisition.enemy;
@@ -9852,8 +10089,32 @@
           const artMin = diff.artilleryMinSupply ?? 110;
           const artChance = diff.artilleryChance ?? 0.28;
           const scoutHarass = diff.scoutHarass ?? 0.32;
+          const aaBias = diff.aaBias ?? 0;
+          const airThreat = playerCombatAirCount();
           const hvCount = enemyHarvesterCount();
           const wf = buildingDef("warFactory");
+          const playerRadio = findPlayerRadioStation(STRUCTURES);
+
+          if (
+            airThreat > 0 &&
+            aaBias > 0 &&
+            Math.random() < aaBias * Math.min(1, airThreat * 0.65) &&
+            canAffordCost("enemy", enemyUnitCost("rocketLauncher")) &&
+            enemyPickRequiresStructure(STRUCTURES, "rocketLauncher")
+          ) {
+            return "rocketLauncher";
+          }
+
+          if (
+            playerRadio &&
+            enemyBrain.knownPlayer &&
+            (diff.radioHuntCount ?? 0) > 0 &&
+            Math.random() < 0.38 &&
+            canAffordCost("enemy", enemyUnitCost("rocketLauncher")) &&
+            enemyPickRequiresStructure(STRUCTURES, "rocketLauncher")
+          ) {
+            return "rocketLauncher";
+          }
 
           if (
             PARAMS.ore.enabled &&
@@ -10434,6 +10695,7 @@
             mapSize: PARAMS.ground.size,
             fogCanvas: fowTexData?.minimapCanvas,
             fogEnabled: PARAMS.fog.enabled,
+            radioIntelActive: playerHasRadioIntel(),
             obstacles: OBSTACLES,
             nodes: CAPTURE_NODES,
             nodesEnabled: PARAMS.nodes.enabled,
@@ -11344,6 +11606,13 @@
         ) {
           if (target.dead) return;
           let finalDamage = damage;
+          if (shooterCtx?.shooterType) {
+            finalDamage = scaleMatchupDamage(
+              finalDamage,
+              shooterCtx.shooterType,
+              target,
+            );
+          }
           if (
             PARAMS.cover.enabled &&
             shooterCtx &&
@@ -11899,6 +12168,7 @@
           let bestD = rangeSq;
           for (const o of units) {
             if (o.dead || o.faction === u.faction) continue;
+            if (!canShooterTarget(u.type, o)) continue;
             if (!canFactionSee(u.faction, o.pos.x, o.pos.z)) continue;
             const dx = o.pos.x - u.pos.x;
             const dz = o.pos.z - u.pos.z;
@@ -11935,6 +12205,7 @@
         }
 
         function fire(shooter, target) {
+          if (!canShooterTarget(shooter.type, target)) return;
           const profile = UNIT_TYPES[shooter.type].shot;
           if (!profile) return;
           if (shooter.type === "scout") sfx.play("mg");
@@ -12082,6 +12353,31 @@
           for (const u of pool) {
             if (assault && shouldPreserveEnemyOrder(u.aiOrder)) continue;
             u.aiOrder = null;
+          }
+
+          const playerRadio = findPlayerRadioStation(STRUCTURES);
+          const radioHunt = diff.radioHuntCount ?? 0;
+          if (
+            playerRadio &&
+            radioHunt > 0 &&
+            (enemyBrain.knownPlayer || !PARAMS.fog.enabled)
+          ) {
+            const hunters = [];
+            for (const u of heavies) {
+              if (u.type !== "rocketLauncher" && u.type !== "flamer") continue;
+              hunters.push(u);
+              if (hunters.length >= radioHunt) break;
+            }
+            hunters.forEach((u, i) => {
+              const idx = heavies.indexOf(u);
+              if (idx >= 0) heavies.splice(idx, 1);
+              const ang = (i / Math.max(1, hunters.length)) * Math.PI * 2;
+              u.aiOrder = {
+                type: "sabotage",
+                x: playerRadio.x + Math.cos(ang) * 12,
+                z: playerRadio.z + Math.sin(ang) * 12,
+              };
+            });
           }
 
           if (PARAMS.ai.objectives && PARAMS.nodes.enabled && capBudget > 0) {
@@ -12241,6 +12537,23 @@
             return;
           }
 
+          if (order.type === "sabotage") {
+            const dx = u.pos.x - order.x;
+            const dz = u.pos.z - order.z;
+            const stopR = u.type === "rocketLauncher" ? 28 : 14;
+            if (dx * dx + dz * dz > stopR * stopR) {
+              if (
+                (u.pathRefresh ?? 0) <= 0 ||
+                pathGoalMismatch(u, order.x, order.z, 16)
+              ) {
+                requestUnitPath(u, u.pos.x, u.pos.z, order.x, order.z, 0.55);
+              }
+            } else {
+              u.path = null;
+            }
+            return;
+          }
+
           if (order.type === "escort") {
             const target = u.aiEscort;
             if (!target || target.dead) {
@@ -12270,13 +12583,14 @@
           const dx = u.pos.x - order.x;
           const dz = u.pos.z - order.z;
           const stopR =
-            order.type === "siege" || order.type === "push" ? 55 : 11;
+            order.type === "siege" ? 12 : order.type === "push" ? 24 : 11;
           if (dx * dx + dz * dz > stopR * stopR) {
+            const tol = u.type === "artillery" ? 22 : 14;
             if (
               (u.pathRefresh ?? 0) <= 0 ||
-              pathGoalMismatch(u, order.x, order.z)
+              pathGoalMismatch(u, order.x, order.z, tol)
             ) {
-              requestUnitPath(u, u.pos.x, u.pos.z, order.x, order.z, 0.5);
+              requestUnitPath(u, u.pos.x, u.pos.z, order.x, order.z, 0.72);
             }
           } else {
             u.path = null;
@@ -12379,12 +12693,17 @@
               const dz = tz - u.pos.z;
               if (
                 t.dead ||
+                !canShooterTarget(u.type, t) ||
                 dx * dx + dz * dz > rangeSq ||
                 !canFactionSee(u.faction, tx, tz)
               ) {
                 u.attackTarget = null;
                 u.combatScan = 0;
               }
+            }
+            if (unitHoldsToFire(u)) {
+              u.path = null;
+              u._pathGoal = null;
             }
             u.combatScan = (u.combatScan ?? 0) - dt;
             if (!u.attackTarget) {
@@ -12418,7 +12737,7 @@
           // attack-move unit holding to fight. Intermediate waypoints use a
           // loose arrival radius so corners stay smooth; the final uses tight.
           for (const u of units) {
-            if (u.dead || !u.path || u.hold) continue;
+            if (u.dead || !u.path || u.hold || unitHoldsToFire(u)) continue;
             if (
               u.type === "harvester" &&
               (u.harvestState === "harvesting" ||
@@ -12442,15 +12761,22 @@
                 : 1;
               const step = Math.min(u.speed * spdMul * dt, d);
               let moved = false;
-              for (const frac of [1, 0.55, 0.28]) {
-                const nx = u.pos.x + (dx / d) * step * frac;
-                const nz = u.pos.z + (dz / d) * step * frac;
-                if (canUnitMoveTo(u, u.pos.x, u.pos.z, nx, nz)) {
-                  u.pos.x = nx;
-                  u.pos.z = nz;
-                  u.wantHeading = Math.atan2(dx, dz);
-                  moved = true;
-                  break;
+              const nearProp =
+                unitNavViolationDepth(u, u.pos.x, u.pos.z) > 0.028;
+              if (nearProp && unitIsWide(u)) {
+                moved = steerUnitAroundBlockers(u, dx, dz, step * 1.05);
+              }
+              if (!moved) {
+                for (const frac of [1, 0.55, 0.28]) {
+                  const nx = u.pos.x + (dx / d) * step * frac;
+                  const nz = u.pos.z + (dz / d) * step * frac;
+                  if (canUnitMoveTo(u, u.pos.x, u.pos.z, nx, nz)) {
+                    u.pos.x = nx;
+                    u.pos.z = nz;
+                    u.wantHeading = Math.atan2(dx, dz);
+                    moved = true;
+                    break;
+                  }
                 }
               }
               if (!moved) {
@@ -12492,7 +12818,8 @@
                   const gdz = goal.z - u.pos.z;
                   const gl = Math.hypot(gdx, gdz) || 1;
                   const side = escapes % 2 === 0 ? 1 : -1;
-                  const ring = Math.ceil(escapes / 2);
+                  const ring =
+                    Math.ceil(escapes / 2) * (unitIsWide(u) ? 1.45 : 1);
                   const ox = (-gdz / gl) * nav.cell * ring * side;
                   const oz = (gdx / gl) * nav.cell * ring * side;
                   const escape = nearestWalkableWorldForUnit(
@@ -12568,8 +12895,11 @@
                   unitNavViolationDepth(a, a.pos.x, a.pos.z),
                   unitNavViolationDepth(b, b.pos.x, b.pos.z),
                 );
-                if (viol > 0.04) push *= 0.3;
-                push = Math.min(push, maxPush);
+                let pushScale = 1;
+                if (viol > 0.04) pushScale = 0.3;
+                if (unitIsIndirectFire(a) && viol > 0.02) pushScale *= 0.35;
+                if (unitIsIndirectFire(b) && viol > 0.02) pushScale *= 0.35;
+                push = Math.min(push * pushScale, maxPush);
                 applyUnitSepPush(a, dx, dz, push);
                 applyUnitSepPush(b, -dx, -dz, push);
               }
@@ -12626,11 +12956,33 @@
             }
           }
 
+          // Phase 1.5b — enemy assault waves close on the player HQ to fire.
+          const playerHQ = BASE_DEFS.player;
+          if (playerHQ && !playerHQ.dead) {
+            for (const u of units) {
+              if (u.dead || u.faction !== "enemy" || u.aiOrder?.type !== "siege")
+                continue;
+              if (u.range <= 0) continue;
+              const dx = u.pos.x - playerHQ.x;
+              const dz = u.pos.z - playerHQ.z;
+              if (dx * dx + dz * dz <= u.range * u.range) {
+                u.path = null;
+                continue;
+              }
+              if (!u.path) {
+                const o = u.aiOrder;
+                const gx = o?.x ?? playerHQ.x;
+                const gz = o?.z ?? playerHQ.z;
+                u.path = pathForUnit(u, u.pos.x, u.pos.z, gx, gz);
+              }
+            }
+          }
+
           // Phase 2.6 — eject units that penetrate props, structures, or rocks.
           const PAD = 0.85;
           const obsPushMax = (R.sepMaxPush ?? 1.35) * 0.85;
           for (const u of units) {
-            if (u.dead || u.flying) continue;
+            if (u.dead || u.flying || unitHoldsToFire(u)) continue;
             const body = unitBodyRadius(u);
             const viol = unitNavViolationDepth(u, u.pos.x, u.pos.z);
             const ejectFrom = (ox, oz, or, pad) => {
@@ -13893,7 +14245,7 @@
         ]);
         _helpBlock(sec, "Economy & groups", [
           ["Bottom panel", "Minimap · groups · resources · commands"],
-          ["Bulldozer", "Build barracks · factory · helipad"],
+          ["Bulldozer", "Radio (map + fog) · AA turret · barracks · factory · helipad"],
           ["Shift+click", "Queue ×5 units"],
           ["Shift+#", "Assign control group"],
           ["#", "Recall control group"],
@@ -15167,7 +15519,7 @@
             onChange: onPropsVisual,
           });
           _toggle(sec, PARAMS.mapProps, "radioStations", {
-            label: "Radio stations",
+            label: "Radio stations (map props)",
             onChange: onPropsVisual,
           });
           _slider(sec, PARAMS.mapProps, "ruinScale", {
@@ -15263,7 +15615,7 @@
           aiHint.style.cssText =
             "font-size:10px;color:var(--text-dim);line-height:1.35;margin-bottom:8px;";
           aiHint.textContent =
-            "Opening: squads capture nodes, scouts screen the flanks (not the center). HQ assault unlocks after holding nodes or spotting you (fog contact).";
+            "Opening: squads capture nodes, scouts screen the flanks (not the center). Build a radio station for map intel; AA turrets and rockets counter helis. Enemy hunts your radio once spotted.";
           sec.appendChild(aiHint);
           _toggle(sec, PARAMS.ai, "enabled", { label: "Enabled" });
           _toggle(sec, PARAMS.ai, "objectives", {

@@ -14,9 +14,33 @@ export const HELIPAD_UNIT_TYPES = ["helicopter"];
 const PRODUCTION_TYPES = ["barracks", "warFactory", "helipad"];
 
 const EXPANSION_LIMITS = {
-  easy: { turret: 1, sandbags: 1, barracks: 0, warFactory: 0, helipad: 0 },
-  normal: { turret: 2, sandbags: 2, barracks: 1, warFactory: 0, helipad: 0 },
-  hard: { turret: 3, sandbags: 2, barracks: 1, warFactory: 1, helipad: 0 },
+  easy: {
+    turret: 1,
+    sandbags: 1,
+    aaTurret: 0,
+    barracks: 0,
+    warFactory: 0,
+    helipad: 0,
+    radioStation: 0,
+  },
+  normal: {
+    turret: 2,
+    sandbags: 2,
+    aaTurret: 1,
+    barracks: 1,
+    warFactory: 0,
+    helipad: 0,
+    radioStation: 1,
+  },
+  hard: {
+    turret: 3,
+    sandbags: 2,
+    aaTurret: 2,
+    barracks: 1,
+    warFactory: 1,
+    helipad: 0,
+    radioStation: 1,
+  },
 };
 
 const EXPANSION_OFFSETS = {
@@ -27,6 +51,12 @@ const EXPANSION_OFFSETS = {
     { dx: 72, dz: 42 },
     { dx: -38, dz: 62 },
     { dx: 38, dz: 62 },
+  ],
+  aaTurret: [
+    { dx: -46, dz: 28 },
+    { dx: 46, dz: 28 },
+    { dx: -62, dz: 48 },
+    { dx: 62, dz: 48 },
   ],
   sandbags: [
     { dx: -24, dz: 32 },
@@ -43,6 +73,11 @@ const EXPANSION_OFFSETS = {
     { dx: 48, dz: 72 },
   ],
   helipad: [{ dx: 0, dz: 92 }],
+  radioStation: [
+    { dx: 0, dz: 36 },
+    { dx: -34, dz: 44 },
+    { dx: 34, dz: 44 },
+  ],
 };
 
 export function structureTypeForUnit(type) {
@@ -79,9 +114,17 @@ export function factionHasStructure(structures, faction, buildingType) {
   return countFactionStructures(structures, faction, buildingType) > 0;
 }
 
+export function findPlayerRadioStation(structures) {
+  return structures.find(
+    (s) =>
+      !s.dead &&
+      s.faction === "player" &&
+      s.buildingType === "radioStation",
+  );
+}
+
 export function enemyRequiredProductionTypes(difficulty = "normal") {
   const types = ["barracks", "warFactory"];
-  // Helipad required whenever the enemy roster includes air units (normal+).
   if (difficulty === "hard" || difficulty === "normal") types.push("helipad");
   return types;
 }
@@ -101,6 +144,7 @@ export function getEnemyBaseStructureSlots(base) {
     barracks: { x: base.x - side, z: base.z + toward * forward },
     warFactory: { x: base.x + side, z: base.z + toward * forward },
     helipad: { x: base.x, z: base.z + toward * (forward + 22) },
+    radioStation: { x: base.x, z: base.z + toward * 40 },
   };
 }
 
@@ -119,6 +163,15 @@ const SLOT_FALLBACKS = {
     { dx: 0, dz: 72 },
     { dx: 28, dz: 68 },
     { dx: -28, dz: 68 },
+  ],
+  radioStation: [
+    { dx: 0, dz: 52 },
+    { dx: -28, dz: 46 },
+    { dx: 28, dz: 46 },
+  ],
+  aaTurret: [
+    { dx: -40, dz: 34 },
+    { dx: 40, dz: 34 },
   ],
 };
 
@@ -211,7 +264,15 @@ export function pickEnemyStructureBuild(structures, difficulty = "normal") {
   }
 
   const limits = expansionLimits(difficulty);
-  const priority = ["turret", "sandbags", "warFactory", "barracks", "helipad"];
+  const priority = [
+    "radioStation",
+    "aaTurret",
+    "turret",
+    "sandbags",
+    "warFactory",
+    "barracks",
+    "helipad",
+  ];
   for (const buildingType of priority) {
     const have = countFactionStructures(structures, "enemy", buildingType);
     const want = requiredCountForType(buildingType, difficulty);

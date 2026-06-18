@@ -52,23 +52,57 @@ function getAssaultPushSlots(target, home, count) {
   return slots;
 }
 
+/** Close siege line — within weapon range of the player HQ (mirrors player attack-base). */
+function getAssaultSiegeSlots(target, home, count, diff = {}) {
+  const toward = home?.z > 0 ? -1 : 1;
+  const approach = diff.siegeApproachDist ?? 12;
+  const approachZ = target.z - toward * approach;
+  const spacing = diff.siegeSpacing ?? 7;
+  const cols = Math.max(1, Math.ceil(Math.sqrt(count)));
+  const slots = [];
+  for (let i = 0; i < count; i++) {
+    const row = Math.floor(i / cols);
+    const col = i % cols;
+    slots.push({
+      x: target.x + (col - (cols - 1) / 2) * spacing,
+      z: approachZ + toward * row * spacing * 0.85,
+    });
+  }
+  return slots;
+}
+
 function waveMembers(units, squadId) {
   return units.filter((u) => !u.dead && u.aiOrder?.squadId === squadId);
 }
 
-function assignSquadOrders(members, waveId, phase, rallySlots, pushSlots) {
+function assignSquadOrders(members, waveId, phase, rallySlots, pushSlots, siegeSlots) {
   members.forEach((u, i) => {
     const rally = rallySlots[i] ?? rallySlots[0];
     const push = pushSlots[i] ?? pushSlots[0];
-    const orderType =
-      phase === "push" ? "push" : phase === "wait" ? "wait" : "rally";
+    const siege = siegeSlots[i] ?? siegeSlots[0];
+    let orderType = "rally";
+    let x = rally.x;
+    let z = rally.z;
+    if (phase === "siege") {
+      orderType = "siege";
+      x = siege.x;
+      z = siege.z;
+    } else if (phase === "push") {
+      orderType = "push";
+      x = push.x;
+      z = push.z;
+    } else if (phase === "wait") {
+      orderType = "wait";
+    }
     u.aiOrder = {
       type: orderType,
       squadId: waveId,
-      x: orderType === "push" ? push.x : rally.x,
-      z: orderType === "push" ? push.z : rally.z,
+      x,
+      z,
       pushX: push.x,
       pushZ: push.z,
+      siegeX: siege.x,
+      siegeZ: siege.z,
     };
   });
 }
@@ -76,7 +110,15 @@ function assignSquadOrders(members, waveId, phase, rallySlots, pushSlots) {
 function refreshWaveFormation(wave, members, home, target, diff) {
   const rallySlots = getEnemyRallySlots(home, members.length, diff);
   const pushSlots = getAssaultPushSlots(target, home, members.length);
-  assignSquadOrders(members, wave.id, wave.phase, rallySlots, pushSlots);
+  const siegeSlots = getAssaultSiegeSlots(target, home, members.length, diff);
+  assignSquadOrders(
+    members,
+    wave.id,
+    wave.phase,
+    rallySlots,
+    pushSlots,
+    siegeSlots,
+  );
 }
 
 /**
@@ -154,7 +196,7 @@ export function assignEnemyRallyOrders({ units, home, diff = {} }) {
 }
 
 /**
- * Advance assault wave phases (rally → push, staggered waves).
+ * Advance assault wave phases (rally → push → siege, staggered waves).
  */
 export function tickEnemyAssaultWaves({ brain, dt, diff = {}, units }) {
   const assault = brain.assault;
@@ -165,6 +207,10 @@ export function tickEnemyAssaultWaves({ brain, dt, diff = {}, units }) {
   const waveGap = diff.assaultWaveGap ?? 12;
   const rallyDist = diff.rallyArriveDist ?? 14;
   const rallyDistSq = rallyDist * rallyDist;
+  const pushReadyFrac = diff.pushReadyFrac ?? 0.45;
+  const pushMaxSec = diff.pushMaxSec ?? 22;
+  const pushDist = diff.pushArriveDist ?? 24;
+  const pushDistSq = pushDist * pushDist;
   const now = performance.now() / 1000;
 
   for (let wi = 0; wi < assault.waves.length; wi++) {
@@ -180,7 +226,9 @@ export function tickEnemyAssaultWaves({ brain, dt, diff = {}, units }) {
       const prev = assault.waves[wi - 1];
       const prevLaunched =
         prev &&
-        (prev.phase === "push" || prev.phase === "done") &&
+        (prev.phase === "push" ||
+          prev.phase === "siege" ||
+          prev.phase === "done") &&
         now - (prev.launchedAt || 0) >= waveGap;
       if (!prev || prevLaunched) {
         wave.phase = "rally";
@@ -207,12 +255,40 @@ export function tickEnemyAssaultWaves({ brain, dt, diff = {}, units }) {
       if (ready) {
         wave.phase = "push";
         wave.launchedAt = now;
+        wave.pushTimer = 0;
         for (const u of members) {
           const o = u.aiOrder;
           if (!o) continue;
           o.type = "push";
           o.x = o.pushX ?? o.x;
           o.z = o.pushZ ?? o.z;
+        }
+      }
+      continue;
+    }
+
+    if (wave.phase === "push") {
+      wave.pushTimer = (wave.pushTimer ?? 0) + dt;
+      const atPush = members.filter((u) => {
+        const o = u.aiOrder;
+        if (!o) return false;
+        const px = o.pushX ?? o.x;
+        const pz = o.pushZ ?? o.z;
+        const dx = u.pos.x - px;
+        const dz = u.pos.z - pz;
+        return dx * dx + dz * dz <= pushDistSq;
+      }).length;
+      const ready =
+        atPush >= Math.max(1, Math.ceil(members.length * pushReadyFrac)) ||
+        wave.pushTimer >= pushMaxSec;
+      if (ready) {
+        wave.phase = "siege";
+        for (const u of members) {
+          const o = u.aiOrder;
+          if (!o) continue;
+          o.type = "siege";
+          o.x = o.siegeX ?? o.x;
+          o.z = o.siegeZ ?? o.z;
         }
       }
     }
@@ -222,5 +298,10 @@ export function tickEnemyAssaultWaves({ brain, dt, diff = {}, units }) {
 /** True when an order is part of an active assault wave and should survive replans. */
 export function shouldPreserveEnemyOrder(order) {
   if (!order?.squadId) return false;
-  return order.type === "rally" || order.type === "push" || order.type === "wait";
+  return (
+    order.type === "rally" ||
+    order.type === "push" ||
+    order.type === "siege" ||
+    order.type === "wait"
+  );
 }

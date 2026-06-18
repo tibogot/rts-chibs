@@ -330,7 +330,30 @@ export function drawRtsMinimap(ctx, state) {
     target,
     visibleAt,
     exploredAt,
+    radioIntelActive = true,
   } = state;
+
+  if (!radioIntelActive) {
+    ctx.fillStyle = "#080a0e";
+    ctx.fillRect(0, 0, mini, mini);
+    ctx.strokeStyle = "rgba(255,255,255,0.08)";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(0.5, 0.5, mini - 1, mini - 1);
+    if (nodesEnabled && nodes) {
+      for (const node of nodes) {
+        const { x, y } = worldToMini(node.x, node.z, mapSize, mini);
+        drawCaptureNode(ctx, x, y, node.owner);
+      }
+    }
+    drawCameraViewport(ctx, {
+      mini,
+      mapSize,
+      target,
+      camera,
+    });
+    drawVignette(ctx, mini);
+    return;
+  }
 
   ctx.clearRect(0, 0, mini, mini);
 
@@ -381,11 +404,15 @@ export function drawRtsMinimap(ctx, state) {
     if (fogEnabled && visibleAt && !visibleAt(s.x, s.z)) continue;
     const { x, y } = worldToMini(s.x, s.z, mapSize, mini);
     const col =
-      s.buildingType === "turret"
-        ? "#88b8e0"
-        : s.buildingType === "warFactory"
-          ? "#d8b868"
-          : "#78b088";
+      s.buildingType === "aaTurret"
+        ? "#a8d0ff"
+        : s.buildingType === "turret"
+          ? "#88b8e0"
+          : s.buildingType === "warFactory"
+            ? "#d8b868"
+            : s.buildingType === "radioStation"
+              ? "#9ab8e8"
+              : "#78b088";
     ctx.fillStyle = col;
     ctx.strokeStyle = "rgba(0,0,0,0.5)";
     ctx.lineWidth = 1;
